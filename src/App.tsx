@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import * as Mp4Muxer from 'mp4-muxer';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import coreURL from '@ffmpeg/core?url';
+import wasmURL from '@ffmpeg/core/wasm?url';
 
 type TranscriptWord = {
     word: string;
@@ -84,8 +86,8 @@ export default function App() {
             setStatus({ text: 'กรุณาเลือกไฟล์ก่อนค่ะ!', type: 'error' });
             return;
         }
-        if (file.size > 50 * 1024 * 1024) {
-            setStatus({ text: 'ขนาดไฟล์ใหญ่เกินไปสำหรับระบบทดสอบ (จำกัด 50MB)', type: 'error' });
+        if (file.size > 2 * 1024 * 1024 * 1024) {
+            setStatus({ text: 'ขนาดไฟล์ใหญ่เกินไปสำหรับระบบทดสอบ (จำกัด 2GB)', type: 'error' });
             return;
         }
 
@@ -101,12 +103,24 @@ export default function App() {
                 body: formData,
             });
 
-            if (!res.ok) {
-                const errData = await res.json();
-                throw new Error(errData.error || `Error ${res.status}`);
+            const resText = await res.text();
+            let data: any;
+            try {
+                data = JSON.parse(resText);
+            } catch (e) {
+                if (!res.ok) {
+                    if (res.status === 413) {
+                        throw new Error('ขนาดวิดีโอใหญ่เกินไปสำหรับการอัปโหลด (Payload Too Large)');
+                    }
+                    throw new Error(`Server error: ${res.status}`);
+                }
+                throw new Error('Invalid JSON response from server');
             }
 
-            const data = await res.json();
+            if (!res.ok) {
+                throw new Error(data?.error || `Error ${res.status}`);
+            }
+
             if (data.transcript) {
                 setTranscriptData(data.transcript);
                 setStatus({ text: '✨ ประมวลผลสำเร็จ! AI หาคำ Hook ให้แล้ว เช็คด้านล่างได้เลย', type: 'success' });
@@ -155,6 +169,8 @@ export default function App() {
         setIsExporting(true);
         setStatus({ text: '🚀 กำลังเปลี่ยนเฟรมและเรนเดอร์ภาพ...', type: 'info' });
 
+        let encoderError: any = null;
+
         try {
             const muxer = new Mp4Muxer.Muxer({
                 target: new Mp4Muxer.ArrayBufferTarget(),
@@ -165,11 +181,14 @@ export default function App() {
 
             const videoEncoder = new window.VideoEncoder({
                 output: (chunk, meta) => muxer.addVideoChunk(chunk, meta as any),
-                error: (e: any) => console.error(e)
+                error: (e: any) => {
+                    console.error("Encoder Error:", e);
+                    encoderError = e;
+                }
             });
             
             videoEncoder.configure({ 
-                codec: 'avc1.4d002a', 
+                codec: 'avc1.4d0034', // Level 5.2 for higher resolutions like 1440x2560
                 width: videoRef.current?.videoWidth || 1080, 
                 height: videoRef.current?.videoHeight || 1920, 
                 bitrate: 15_000_000, // 15 Mbps for highest quality near original
@@ -202,6 +221,11 @@ export default function App() {
                     
                     const onFrame: VideoFrameRequestCallback = (now, metadata) => {
                         if (isResolved) return;
+                        if (encoderError) {
+                            isResolved = true;
+                            reject(new Error("Video Encoding failed: " + encoderError.message));
+                            return;
+                        }
                         const time = metadata.mediaTime;
                         ctx.drawImage(renderVideo, 0, 0, canvas.width, canvas.height);
 
@@ -228,10 +252,21 @@ export default function App() {
                             const wordsMeta = group.words.map((w, i) => {
                                 const isActive = activeWordIndex !== -1 ? i === activeWordIndex : (time >= w.start && time <= w.end);
                                 let scale = 1.0;
-                                if(isActive) {
-                                    if(w.is_hook) scale = 2.2;
-                                    else if (template === 'tpl-hormozi') scale = 1.15;
-                                    else scale = 1.1;
+                                let rotation = 0;
+                                let yOffset = 0;
+
+                                if (isActive) {
+                                    if (template === 'tpl-default') {
+                                        scale = w.is_hook ? 2.5 : 1.35;
+                                        yOffset = w.is_hook ? canvas.height * 0.025 : canvas.height * 0.015;
+                                        if (w.is_hook) rotation = 2;
+                                    } else if (template === 'tpl-hormozi') {
+                                        scale = w.is_hook ? 2.8 : 1.45;
+                                        rotation = w.is_hook ? -5 : -3;
+                                    } else if (template === 'tpl-beast') {
+                                        scale = w.is_hook ? 3.2 : 1.6;
+                                        yOffset = w.is_hook ? canvas.height * 0.04 : canvas.height * 0.02;
+                                    }
                                 }
                                 
                                 const fontSize = baseFontSize * scale;
@@ -242,10 +277,10 @@ export default function App() {
                                 const margin = baseFontSize * 0.2;
                                 totalWidth += width + margin;
                                 
-                                return { text, width, isActive, isHook: w.is_hook, margin, fontSize };
+                                return { text, width, isActive, isHook: w.is_hook, margin, fontSize, rotation, yOffset };
                             });
 
-                            const maxWidth = canvas.width * 0.85; // 85% for TikTok/Reels safe zone
+                            const maxWidth = canvas.width * 0.90; // Slightly wider for 2GB/4K safe zone
                             let globalScale = 1;
                             if (totalWidth > maxWidth) {
                                 globalScale = maxWidth / totalWidth;
@@ -262,30 +297,41 @@ export default function App() {
                                 ctx.font = `${fontWeight} ${finalFontSize}px "${fontFamily}", sans-serif`;
                                 
                                 ctx.save();
-                                let drawYPos = yPos;
-                                if(meta.isActive && meta.isHook) {
-                                    drawYPos -= (canvas.height * 0.02);
-                                }
+                                let drawYPos = yPos - (meta.yOffset * globalScale);
 
                                 ctx.translate(currentX + (finalWidth / 2), drawYPos);
                                 
-                                if (meta.isActive && template === 'tpl-hormozi') ctx.rotate(-2 * Math.PI / 180);
-                                if (meta.isActive && meta.isHook && template === 'tpl-hormozi') ctx.rotate(-4 * Math.PI / 180);
+                                if (meta.isActive && meta.rotation !== 0) {
+                                    ctx.rotate(meta.rotation * Math.PI / 180);
+                                }
                                 
                                 ctx.lineJoin = "round";
 
                                 if (meta.isActive) {
                                     ctx.fillStyle = template === 'tpl-hormozi' && meta.isHook ? "#fff" : highlightColor;
-                                    ctx.shadowColor = 'rgba(0,0,0,0.6)';
-                                    ctx.shadowBlur = 8;
-                                    ctx.shadowOffsetX = 2;
-                                    ctx.shadowOffsetY = 2;
+                                    
+                                    if (template === 'tpl-hormozi') {
+                                        ctx.shadowColor = 'rgba(0,0,0,1)';
+                                        ctx.shadowBlur = 0;
+                                        ctx.shadowOffsetX = 4 * globalScale;
+                                        ctx.shadowOffsetY = 4 * globalScale;
+                                    } else if (template === 'tpl-beast') {
+                                        ctx.shadowColor = meta.isHook ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.4)';
+                                        ctx.shadowBlur = meta.isHook ? 30 * globalScale : 15 * globalScale;
+                                        ctx.shadowOffsetX = 0;
+                                        ctx.shadowOffsetY = 0;
+                                    } else {
+                                        ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                                        ctx.shadowBlur = meta.isHook ? 20 * globalScale : 12 * globalScale;
+                                        ctx.shadowOffsetX = 2 * globalScale;
+                                        ctx.shadowOffsetY = 2 * globalScale;
+                                    }
                                 } else {
                                     ctx.fillStyle = "white"; 
-                                    ctx.shadowColor = 'rgba(0,0,0,0.4)';
-                                    ctx.shadowBlur = 4;
-                                    ctx.shadowOffsetX = 1;
-                                    ctx.shadowOffsetY = 1;
+                                    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+                                    ctx.shadowBlur = 4 * globalScale;
+                                    ctx.shadowOffsetX = 1 * globalScale;
+                                    ctx.shadowOffsetY = 1 * globalScale;
                                 }
                                 ctx.fillText(meta.text, 0, 0);
                                 ctx.restore();
@@ -358,10 +404,9 @@ export default function App() {
                 });
             });
 
-            const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
             await ffmpeg.load({
-                coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-                wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm')
+                coreURL: await toBlobURL(coreURL, 'text/javascript'),
+                wasmURL: await toBlobURL(wasmURL, 'application/wasm')
             });
 
             await ffmpeg.writeFile('temp_video.mp4', await fetchFile(videoBlob));
@@ -586,27 +631,31 @@ export default function App() {
                             });
 
                             return activeGroup.words.map((w, i) => {
-                                // Fallback: if no word is strictly active by time, activate the first or matching word, but here we strictly use the activeWordIndex.
                                 const isActive = activeWordIndex !== -1 ? i === activeWordIndex : (currentTime >= w.start && currentTime <= w.end);
-                                const isHormozi = template === 'tpl-hormozi';
-                                const wordText = isHormozi ? w.word.toUpperCase() : w.word;
+                                const wordText = template !== 'tpl-default' ? w.word.toUpperCase() : w.word;
                                 
+                                const classes = [
+                                    'word',
+                                    isActive ? 'active' : '',
+                                    w.is_hook ? 'hook-word' : ''
+                                ].filter(Boolean).join(' ');
+
+                                const style: React.CSSProperties = {};
                                 if (isActive) {
-                                if (w.is_hook) {
-                                    return <span key={i} className="word active hook-word" style={{ 
-                                        color: highlightColor,
-                                        textShadow: '3px 3px 15px rgba(0,0,0,0.8)'
-                                    }}>{wordText}</span>;
-                                } else {
-                                    return <span key={i} className="word active" style={{ 
-                                        color: highlightColor,
-                                        textShadow: `0px 0px 15px ${highlightColor}, 2px 2px 6px rgba(0,0,0,0.7)`
-                                    }}>{wordText}</span>;
+                                    if (template === 'tpl-hormozi' && w.is_hook) {
+                                        style.color = '#fff';
+                                    } else {
+                                        style.color = highlightColor;
+                                    }
                                 }
-                            } else {
-                                return <span key={i} className="word">{wordText}</span>;
-                            }
-                        })})()}
+
+                                return (
+                                    <span key={i} className={classes} style={style}>
+                                        {wordText}
+                                    </span>
+                                );
+                            });
+                        })()}
                     </div>
                 </div>
             </div>
