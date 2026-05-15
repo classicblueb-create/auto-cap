@@ -1,0 +1,6 @@
+{
+  "name": "Auto Caption Pro",
+  "description": "AI-powered web app that automatically generates video captions from audio using the Gemini API, identifying and highlighting 'hook' words for engaging short-form videos like TikTok or Reels.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
