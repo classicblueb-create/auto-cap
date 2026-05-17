@@ -1,31 +1,229 @@
-@import url('https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;800&family=Prompt:wght@400;600;800&family=Sarabun:wght@400;600;700&family=Noto+Sans+Thai:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Kanit:wght@400;600;800&family=Prompt:wght@400;600;800&family=Sarabun:wght@400;600;700&family=Noto+Sans+Thai:wght@400;600;700&family=Mitr:wght@400;600&family=Chakra+Petch:wght@400;600;700&family=Inter:wght@300;400;600;700&family=Space+Grotesk:wght@300;400;600;700&family=Lora:wght@400;600;700&display=swap');
 @import "tailwindcss";
 
 @theme {
   --font-kanit: "Kanit", sans-serif;
   --font-prompt: "Prompt", sans-serif;
+  --font-mitr: "Mitr", sans-serif;
+  --font-chakra: "Chakra Petch", sans-serif;
+  --font-inter: "Inter", sans-serif;
+  --font-space: "Space Grotesk", sans-serif;
+  --font-serif: "Lora", serif;
+}
+
+:root {
+  --glass-bg: rgba(255, 255, 255, 0.95);
+  --glass-border: rgba(255, 255, 255, 1);
+  --glass-blur: 0px;
+  --primary-cyan: #dcfce7;
+  --primary-blue: #dbeafe;
+  --primary-pink: #fce7f3;
+  --accent-orange: #fed7aa;
 }
 
 body {
-    font-family: var(--font-kanit);
-    background: #121212;
-    color: #fff;
-    transition: font-family 0.3s;
+    font-family: var(--font-inter);
+    background: #e2e8f0;
+    color: #0f172a;
+    background-image: 
+        radial-gradient(at 10% 20%, #f1f5f9 0px, transparent 40%),
+        radial-gradient(at 90% 80%, #cbd5e1 0px, transparent 40%);
+    background-attachment: fixed;
+    padding: 20px;
+}
+
+.main-container {
+    background: #ffffff;
+    border-radius: 48px;
+    box-shadow: 0 50px 100px -20px rgba(0,0,0,0.1);
+    min-height: calc(100vh - 40px);
+    width: 100%;
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+}
+
+.glass-card {
+    background: #ffffff;
+    border-radius: 32px;
+    border: 1px solid #f1f5f9;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+}
+
+.gradient-card-orange {
+    background: linear-gradient(135deg, #fef3c7 0%, #fed7aa 100%);
+    border-radius: 32px;
+    color: #78350f;
+}
+
+.gradient-card-blue {
+    background: linear-gradient(135deg, #dcfce7 0%, #dbeafe 50%, #f3e8ff 100%);
+    border-radius: 32px;
+    color: #1e3a8a;
+}
+
+.pitch-button {
+    background: #000000;
+    color: #ffffff;
+    border-radius: 12px;
+    font-weight: 700;
+    transition: all 0.2s;
+    padding: 14px 24px;
+}
+
+.pitch-button:hover {
+    transform: scale(1.02);
+    box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+}
+
+.glass-input {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    color: #1e293b;
+    transition: all 0.3s;
+}
+
+.glass-input:focus {
+    border-color: #000;
+    background: #fff;
+    outline: none;
+}
+
+.glass-button {
+    background: #f1f5f9;
+    border: 1px solid transparent;
+    border-radius: 16px;
+    transition: all 0.2s;
+    color: #1e293b;
+    font-weight: 600;
+}
+
+.glass-button:hover:not(:disabled) {
+    background: #e2e8f0;
+}
+
+.timeline-container {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 32px;
+    padding: 30px;
+}
+
+.timeline-track {
+    position: relative;
+    height: 140px;
+    background: rgba(0, 0, 0, 0.03);
+    border-radius: 16px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    cursor: crosshair;
+}
+
+.timeline-ruler {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 25px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    display: flex;
+    pointer-events: none;
+}
+
+.ruler-mark {
+    position: absolute;
+    bottom: 0;
+    border-left: 1px solid rgba(0, 0, 0, 0.1);
+    height: 10px;
+    font-size: 8px;
+    color: #94a3b8;
+    padding-left: 3px;
+    display: flex;
+    align-items: flex-end;
+}
+
+.timeline-word-clip {
+    position: absolute;
+    top: 45px;
+    height: 60px;
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(255, 255, 255, 1);
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #1e293b;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    transition: transform 0.1s, box-shadow 0.1s, background-color 0.2s;
+    user-select: none;
+    overflow: hidden;
+}
+
+.timeline-word-clip:hover {
+    background: white;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    z-index: 5;
+}
+
+.timeline-word-clip.active {
+    background: #9ed8d8;
+    border-color: #134e4a;
+    color: #134e4a;
+    box-shadow: 0 0 15px rgba(158, 216, 216, 0.4);
+    z-index: 6;
+}
+
+.timeline-word-clip.hook {
+    background: #fbcfe8;
+    border-color: #be185d;
+    color: #be185d;
+}
+
+.timeline-word-clip.hook.active {
+    background: #f472b6;
+    color: white;
+}
+
+.timeline-playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ef4444;
+    z-index: 20;
+    pointer-events: none;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+}
+
+.timeline-playhead::after {
+    content: '';
+    position: absolute;
+    top: -5px;
+    left: -4px;
+    width: 10px;
+    height: 10px;
+    background: #ef4444;
+    border-radius: 50%;
 }
 
 #player-wrapper {
     position: relative;
     width: 100%;
-    max-width: 400px;
+    max-width: 360px;
     aspect-ratio: 9/16;
     margin: 0 auto;
     background: #000;
-    border: 2px solid #333;
-    border-radius: 12px;
+    border: 12px solid #e2e8f0;
+    border-radius: 48px;
     overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    box-shadow: 0 40px 100px rgba(0,0,0,0.15);
 }
 
 video {
@@ -36,7 +234,7 @@ video {
 
 #captions-overlay {
     position: absolute;
-    bottom: 20%;
+    bottom: 18%;
     width: 100%;
     pointer-events: none;
     padding: 0 10%;
@@ -55,62 +253,62 @@ video {
 
 /* Templates CSS */
 .tpl-default .word {
-    font-size: 26px;
+    font-size: 22px;
     color: #ffffff;
     text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
     font-weight: 600;
 }
 .tpl-default .word.active {
-    font-size: 34px;
+    font-size: 28px;
     font-weight: 700;
-    transform: translateY(-8px) scale(1.15);
-    text-shadow: 0 0 12px rgba(255,255,255,0.4), 2px 2px 6px rgba(0,0,0,0.8);
+    transform: translateY(-6px) scale(1.1);
+    text-shadow: 0 0 10px rgba(255,255,255,0.4), 2px 2px 6px rgba(0,0,0,0.8);
 }
 .tpl-default .word.active.hook-word {
-    font-size: 55px;
+    font-size: 42px;
     font-weight: 800;
-    transform: translateY(-12px) scale(1.3) rotate(2deg);
-    text-shadow: 0 0 20px rgba(255,255,255,0.6), 3px 3px 10px rgba(0,0,0,0.9);
+    transform: translateY(-10px) scale(1.2) rotate(2deg);
+    text-shadow: 0 0 16px rgba(255,255,255,0.6), 3px 3px 10px rgba(0,0,0,0.9);
 }
 
 .tpl-hormozi .word {
-    font-size: 28px;
+    font-size: 24px;
     color: #ffffff;
     text-transform: uppercase;
     font-weight: 800;
     font-family: var(--font-prompt);
-    text-shadow: 3px 3px 0px rgba(0,0,0,1);
-    letter-spacing: -1px;
+    text-shadow: 2px 2px 0px rgba(0,0,0,1);
+    letter-spacing: -0.5px;
 }
 .tpl-hormozi .word.active {
-    font-size: 38px;
-    transform: scale(1.2) rotate(-3deg);
-    text-shadow: 4px 4px 0px rgba(0,0,0,1);
+    font-size: 32px;
+    transform: scale(1.15) rotate(-3deg);
+    text-shadow: 3px 3px 0px rgba(0,0,0,1);
 }
 .tpl-hormozi .word.active.hook-word {
-    font-size: 65px;
-    transform: scale(1.4) rotate(-5deg);
+    font-size: 52px;
+    transform: scale(1.3) rotate(-5deg);
     color: #fff !important;
-    text-shadow: 5px 5px 0px rgba(0,0,0,1), 0 0 25px rgba(255,255,255,0.4) !important;
+    text-shadow: 4px 4px 0px rgba(0,0,0,1), 0 0 20px rgba(255,255,255,0.4) !important;
 }
 
 .tpl-beast .word {
-    font-size: 26px;
+    font-size: 22px;
     color: #f3f4f6;
     font-weight: 800;
     text-transform: uppercase;
-    text-shadow: 0 4px 8px rgba(0,0,0,0.6);
+    text-shadow: 0 3px 6px rgba(0,0,0,0.6);
 }
 .tpl-beast .word.active {
-    font-size: 42px;
+    font-size: 36px;
     color: #fff;
-    transform: translateY(-10px) scale(1.2);
-    text-shadow: 0 0 15px rgba(255,255,255,0.8), 0 8px 16px rgba(0,0,0,0.5);
+    transform: translateY(-8px) scale(1.15);
+    text-shadow: 0 0 12px rgba(255,255,255,0.8), 0 6px 12px rgba(0,0,0,0.5);
 }
 .tpl-beast .word.active.hook-word {
-    font-size: 75px;
-    transform: translateY(-20px) scale(1.4);
-    text-shadow: 0 0 30px rgba(255,255,255,1), 0 15px 30px rgba(0,0,0,0.6) !important;
+    font-size: 58px;
+    transform: translateY(-15px) scale(1.35);
+    text-shadow: 0 0 25px rgba(255,255,255,1), 0 12px 24px rgba(0,0,0,0.6) !important;
 }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }

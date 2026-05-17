@@ -24,7 +24,10 @@ export default function App() {
     const [videoSrc, setVideoSrc] = useState<string>('');
     const [template, setTemplate] = useState<string>('tpl-default');
     const [highlightColor, setHighlightColor] = useState<string>('#FFFF00');
+    const [selectedFont, setSelectedFont] = useState<string>('Kanit');
+    const [customFontConfig, setCustomFontConfig] = useState({ name: '', url: '' });
     const [wordCount, setWordCount] = useState<number>(3);
+    const [fontSizeMultiplier, setFontSizeMultiplier] = useState<number>(1.0);
     const [transcriptData, setTranscriptData] = useState<TranscriptWord[]>([]);
     
     const [status, setStatus] = useState<{ text: string; type: 'info' | 'success' | 'error'; progress?: number } | null>(null);
@@ -32,9 +35,68 @@ export default function App() {
     const [isExporting, setIsExporting] = useState(false);
     
     const [currentTime, setCurrentTime] = useState(0);
+    const [dragging, setDragging] = useState<{ index: number; type: 'move' | 'resize-left' | 'resize-right'; initialX: number; initialStart: number; initialEnd: number } | null>(null);
+    const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const timelineTrackRef = useRef<HTMLDivElement>(null);
+
+    const handleTimelineMouseMove = (e: React.MouseEvent) => {
+        if (!dragging || !timelineTrackRef.current) return;
+        
+        const rect = timelineTrackRef.current.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left + timelineTrackRef.current.scrollLeft;
+        const timeDiff = (mouseX - dragging.initialX) / 150;
+        
+        const newData = [...transcriptData];
+        const item = newData[dragging.index];
+
+        if (dragging.type === 'move') {
+            const newStart = Math.max(0, dragging.initialStart + timeDiff);
+            const duration = dragging.initialEnd - dragging.initialStart;
+            item.start = newStart;
+            item.end = newStart + duration;
+        } else if (dragging.type === 'resize-left') {
+            const newStart = Math.max(0, Math.min(dragging.initialEnd - 0.1, dragging.initialStart + timeDiff));
+            item.start = newStart;
+        } else if (dragging.type === 'resize-right') {
+            const newEnd = Math.max(dragging.initialStart + 0.1, dragging.initialEnd + timeDiff);
+            item.end = newEnd;
+        }
+
+        setTranscriptData(newData);
+    };
+
+    const handleTimelineMouseUp = () => {
+        setDragging(null);
+    };
+
+    useEffect(() => {
+        if (dragging) {
+            window.addEventListener('mousemove', handleTimelineMouseMove as any);
+            window.addEventListener('mouseup', handleTimelineMouseUp);
+        } else {
+            window.removeEventListener('mousemove', handleTimelineMouseMove as any);
+            window.removeEventListener('mouseup', handleTimelineMouseUp);
+        }
+        return () => {
+            window.removeEventListener('mousemove', handleTimelineMouseMove as any);
+            window.removeEventListener('mouseup', handleTimelineMouseUp);
+        };
+    }, [dragging, transcriptData]);
+
+    useEffect(() => {
+        let rafId: number;
+        const update = () => {
+            if (videoRef.current && !videoRef.current.paused) {
+                setCurrentTime(videoRef.current.currentTime);
+            }
+            rafId = requestAnimationFrame(update);
+        };
+        rafId = requestAnimationFrame(update);
+        return () => cancelAnimationFrame(rafId);
+    }, []);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -49,33 +111,46 @@ export default function App() {
     const currentGroups = useMemo(() => {
         if (!transcriptData || transcriptData.length === 0) return [];
         const groups: Group[] = [];
-        let currentGroup: TranscriptWord[] = [];
+        let currentWords: TranscriptWord[] = [];
 
         for (let i = 0; i < transcriptData.length; i++) {
             const item = transcriptData[i];
-            if (item.is_hook) {
-                if (currentGroup.length > 0) {
-                    groups.push({ words: currentGroup, start: currentGroup[0].start, end: currentGroup[currentGroup.length - 1].end });
-                    currentGroup = [];
-                }
-                groups.push({ words: [item], start: item.start, end: item.end, isHookGroup: true });
-            } else {
-                currentGroup.push(item);
-                if (currentGroup.length >= wordCount) {
-                    groups.push({ words: currentGroup, start: currentGroup[0].start, end: currentGroup[currentGroup.length - 1].end });
-                    currentGroup = [];
-                }
+            const lastItem = currentWords[currentWords.length - 1];
+            
+            // Break group if:
+            // 1. Reached word count limit
+            // 2. OR there is a significant pause (> 0.5s) between words
+            const isPause = lastItem && (item.start - lastItem.end > 0.5);
+            
+            if (currentWords.length > 0 && (currentWords.length >= wordCount || isPause)) {
+                groups.push({
+                    words: currentWords,
+                    start: currentWords[0].start,
+                    end: currentWords[currentWords.length - 1].end
+                });
+                currentWords = [];
             }
+            
+            currentWords.push(item);
         }
-        if (currentGroup.length > 0) {
-            groups.push({ words: currentGroup, start: currentGroup[0].start, end: currentGroup[currentGroup.length - 1].end });
+        
+        if (currentWords.length > 0) {
+            groups.push({
+                words: currentWords,
+                start: currentWords[0].start,
+                end: currentWords[currentWords.length - 1].end
+            });
         }
+        
         return groups;
     }, [transcriptData, wordCount]);
 
     const activeGroup = useMemo(() => {
+        if (currentGroups.length === 0) return undefined;
+        // Group detection: find group where current time is within its bounds
+        // We use a small look-ahead to avoid gaps
         const index = currentGroups.findIndex((g, i) => {
-            const nextStart = currentGroups[i+1]?.start ?? g.end + 0.5;
+            const nextStart = currentGroups[i+1]?.start ?? g.end;
             return currentTime >= g.start && currentTime < nextStart;
         });
         return index !== -1 ? currentGroups[index] : undefined;
@@ -202,7 +277,7 @@ export default function App() {
             const ctx = canvas.getContext('2d');
             if (!ctx) throw new Error("Could not get 2d context for canvas");
 
-            let fontFamily = template === 'tpl-hormozi' ? 'Prompt' : 'Kanit';
+            let fontFamily = selectedFont === 'Custom' ? customFontConfig.name : selectedFont;
             let fontWeight = template === 'tpl-hormozi' || template === 'tpl-beast' ? '800' : '600';
             const isUppercase = template !== 'tpl-default';
 
@@ -230,7 +305,7 @@ export default function App() {
                         ctx.drawImage(renderVideo, 0, 0, canvas.width, canvas.height);
 
                         const groupIndex = currentGroups.findIndex((g, i) => {
-                            const nextStart = currentGroups[i+1]?.start ?? g.end + 0.5;
+                            const nextStart = currentGroups[i+1]?.start ?? g.end + 0.1; // Reduced buffer for tighter sync
                             return time >= g.start && time < nextStart;
                         });
                         const group = groupIndex !== -1 ? currentGroups[groupIndex] : undefined;
@@ -238,15 +313,16 @@ export default function App() {
                         if (group) {
                             ctx.textAlign = "center"; 
                             ctx.textBaseline = "bottom";
-                            let yPos = canvas.height * 0.85;
+                            // SAFE ZONE ADJUSTMENT: Center-bottom but avoiding the very bottom TikTok UI
+                            let yPos = canvas.height * 0.82; 
 
                             const baseFontSize = canvas.width * (template === 'tpl-hormozi' ? 0.065 : 0.06); 
                             
                             let totalWidth = 0;
 
                             const activeWordIndex = group.words.findIndex((w, i) => {
-                                const nextStart = group.words[i+1]?.start ?? group.end + 0.5;
-                                return time >= w.start && time < nextStart;
+                                const nextStart = group.words[i+1]?.start ?? group.end + 0.1;
+                                return time >= (w.start - 0.02) && time < nextStart; // Slight leading edge for sync
                             });
 
                             const wordsMeta = group.words.map((w, i) => {
@@ -257,19 +333,25 @@ export default function App() {
 
                                 if (isActive) {
                                     if (template === 'tpl-default') {
-                                        scale = w.is_hook ? 2.5 : 1.35;
-                                        yOffset = w.is_hook ? canvas.height * 0.025 : canvas.height * 0.015;
+                                        scale = w.is_hook ? 2.2 : 1.35;
+                                        yOffset = w.is_hook ? canvas.height * 0.02 : canvas.height * 0.015;
                                         if (w.is_hook) rotation = 2;
                                     } else if (template === 'tpl-hormozi') {
-                                        scale = w.is_hook ? 2.8 : 1.45;
+                                        scale = w.is_hook ? 2.5 : 1.45;
                                         rotation = w.is_hook ? -5 : -3;
                                     } else if (template === 'tpl-beast') {
-                                        scale = w.is_hook ? 3.2 : 1.6;
-                                        yOffset = w.is_hook ? canvas.height * 0.04 : canvas.height * 0.02;
+                                        scale = w.is_hook ? 2.8 : 1.6;
+                                        yOffset = w.is_hook ? canvas.height * 0.03 : canvas.height * 0.02;
                                     }
                                 }
                                 
-                                const fontSize = baseFontSize * scale;
+                                // Cap absolute font size to avoid taking up the whole screen
+                                const maxAllowedFontSize = canvas.height * 0.15;
+                                let fontSize = baseFontSize * scale;
+                                if (fontSize > maxAllowedFontSize) {
+                                    fontSize = maxAllowedFontSize;
+                                }
+
                                 ctx.font = `${fontWeight} ${fontSize}px "${fontFamily}", sans-serif`;
                                 
                                 const text = isUppercase ? w.word.toUpperCase() : w.word;
@@ -280,24 +362,30 @@ export default function App() {
                                 return { text, width, isActive, isHook: w.is_hook, margin, fontSize, rotation, yOffset };
                             });
 
-                            const maxWidth = canvas.width * 0.90; // Slightly wider for 2GB/4K safe zone
+                            // STRICT SAFE ZONE: Max width 85% of canvas
+                            const maxWidth = canvas.width * 0.85; 
                             let globalScale = 1;
                             if (totalWidth > maxWidth) {
                                 globalScale = maxWidth / totalWidth;
-                                totalWidth = maxWidth;
                             }
+                            
+                            // Recalculate totalWidth with globalScale
+                            totalWidth = wordsMeta.reduce((acc, m) => acc + (m.width * globalScale * fontSizeMultiplier) + (m.margin * globalScale * fontSizeMultiplier), 0);
 
                             let currentX = (canvas.width / 2) - (totalWidth / 2);
                             
                             wordsMeta.forEach(meta => {
-                                const finalFontSize = meta.fontSize * globalScale;
-                                const finalWidth = meta.width * globalScale;
-                                const finalMargin = meta.margin * globalScale;
+                                const finalFontSize = meta.fontSize * globalScale * fontSizeMultiplier;
+                                const finalWidth = meta.width * globalScale * fontSizeMultiplier;
+                                const finalMargin = meta.margin * globalScale * fontSizeMultiplier;
 
                                 ctx.font = `${fontWeight} ${finalFontSize}px "${fontFamily}", sans-serif`;
                                 
                                 ctx.save();
-                                let drawYPos = yPos - (meta.yOffset * globalScale);
+                                // Boundary check for vertical pos
+                                let drawYPos = yPos - (meta.yOffset * globalScale * fontSizeMultiplier);
+                                // Ensure text doesn't go below the canvas or above too much
+                                drawYPos = Math.min(canvas.height - 10, Math.max(finalFontSize + 10, drawYPos));
 
                                 ctx.translate(currentX + (finalWidth / 2), drawYPos);
                                 
@@ -307,31 +395,32 @@ export default function App() {
                                 
                                 ctx.lineJoin = "round";
 
+                                const shadowScale = globalScale * fontSizeMultiplier;
                                 if (meta.isActive) {
                                     ctx.fillStyle = template === 'tpl-hormozi' && meta.isHook ? "#fff" : highlightColor;
                                     
                                     if (template === 'tpl-hormozi') {
                                         ctx.shadowColor = 'rgba(0,0,0,1)';
                                         ctx.shadowBlur = 0;
-                                        ctx.shadowOffsetX = 4 * globalScale;
-                                        ctx.shadowOffsetY = 4 * globalScale;
+                                        ctx.shadowOffsetX = 4 * shadowScale;
+                                        ctx.shadowOffsetY = 4 * shadowScale;
                                     } else if (template === 'tpl-beast') {
                                         ctx.shadowColor = meta.isHook ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.4)';
-                                        ctx.shadowBlur = meta.isHook ? 30 * globalScale : 15 * globalScale;
+                                        ctx.shadowBlur = meta.isHook ? 30 * shadowScale : 15 * shadowScale;
                                         ctx.shadowOffsetX = 0;
                                         ctx.shadowOffsetY = 0;
                                     } else {
                                         ctx.shadowColor = 'rgba(0,0,0,0.8)';
-                                        ctx.shadowBlur = meta.isHook ? 20 * globalScale : 12 * globalScale;
-                                        ctx.shadowOffsetX = 2 * globalScale;
-                                        ctx.shadowOffsetY = 2 * globalScale;
+                                        ctx.shadowBlur = meta.isHook ? 20 * shadowScale : 12 * shadowScale;
+                                        ctx.shadowOffsetX = 2 * shadowScale;
+                                        ctx.shadowOffsetY = 2 * shadowScale;
                                     }
                                 } else {
                                     ctx.fillStyle = "white"; 
                                     ctx.shadowColor = 'rgba(0,0,0,0.6)';
-                                    ctx.shadowBlur = 4 * globalScale;
-                                    ctx.shadowOffsetX = 1 * globalScale;
-                                    ctx.shadowOffsetY = 1 * globalScale;
+                                    ctx.shadowBlur = 4 * shadowScale;
+                                    ctx.shadowOffsetX = 1 * shadowScale;
+                                    ctx.shadowOffsetY = 1 * shadowScale;
                                 }
                                 ctx.fillText(meta.text, 0, 0);
                                 ctx.restore();
@@ -349,7 +438,7 @@ export default function App() {
                         
                         const progressPercentage = (time / renderVideo.duration) * 100;
                         setStatus({ 
-                            text: `⏳ อัปเกรดความเร็ว เรนเดอร์ไปแล้ว ${progressPercentage.toFixed(0)}% ไม่ต้องรอสลับฉาก!`, 
+                            text: `⏳ กำลังรวมภาพ... ${progressPercentage.toFixed(0)}%`, 
                             type: 'info',
                             progress: progressPercentage
                         });
@@ -455,210 +544,397 @@ export default function App() {
     };
 
     return (
-        <div className="min-h-screen p-4 md:p-8 flex flex-col lg:flex-row gap-8 justify-center items-start">
-            {/* Control Panel */}
-            <div className="w-full lg:w-1/2 max-w-lg bg-gray-900 p-6 rounded-2xl shadow-xl border border-gray-800">
-                <h2 className="text-2xl font-bold mb-2 flex items-center gap-2">🎬 Auto Caption Pro</h2>
-                <p className="text-gray-400 text-sm mb-6">สร้างซับอัตโนมัติ + AI ตรวจจับคำดึงสายตา (Hook)</p>
+        <div className="main-container animate-in fade-in duration-700">
+            {customFontConfig.url && (
+                <style dangerouslySetInnerHTML={{ __html: `@import url('${customFontConfig.url}');` }} />
+            )}
 
-                <div className="mb-4 bg-gray-800 p-4 rounded-xl border border-gray-700">
-                    <label className="block text-sm font-semibold mb-2">1. อัปโหลดวิดีโอ/เสียง</label>
-                    <input 
-                        type="file" 
-                        ref={fileInputRef}
-                        onChange={handleFileChange}
-                        accept="video/mp4,video/webm,audio/mp3,audio/wav" 
-                        className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"
-                    />
+            {/* Branded Header */}
+            <header className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center text-white font-bold">P</div>
+                    <span className="text-2xl font-serif font-black tracking-tight">Caption Pro</span>
                 </div>
-
-                <div className="mb-4 bg-gray-800 p-4 rounded-xl border border-gray-700">
-                    <label className="block text-sm font-semibold mb-3">2. เลือกสไตล์และตั้งค่า</label>
-                    <div className="grid grid-cols-3 gap-2 mb-4">
-                        <button 
-                            onClick={() => { setTemplate('tpl-default'); setHighlightColor('#FFFF00'); }}
-                            className={`w-full text-white text-xs font-bold py-2 px-2 rounded-lg border-2 transition ${template === 'tpl-default' ? 'bg-blue-600 border-blue-400' : 'bg-gray-700 border-transparent hover:bg-gray-600'}`}
-                        >
-                            ⭐ Default
-                        </button>
-                        <button 
-                            onClick={() => { setTemplate('tpl-hormozi'); setHighlightColor('#00FF00'); }}
-                            className={`w-full text-white text-xs font-bold py-2 px-2 rounded-lg border-2 transition ${template === 'tpl-hormozi' ? 'bg-blue-600 border-blue-400' : 'bg-gray-700 border-transparent hover:bg-gray-600'}`}
-                        >
-                            🔥 Hormozi
-                        </button>
-                        <button 
-                            onClick={() => { setTemplate('tpl-beast'); setHighlightColor('#00FFFF'); }}
-                            className={`w-full text-white text-xs font-bold py-2 px-2 rounded-lg border-2 transition ${template === 'tpl-beast' ? 'bg-blue-600 border-blue-400' : 'bg-gray-700 border-transparent hover:bg-gray-600'}`}
-                        >
-                            ⚡ Beast
-                        </button>
+                <div className="flex items-center gap-6">
+                    <div className="hidden md:flex items-center gap-6 text-sm font-bold text-gray-400">
+                        <span className="cursor-pointer hover:text-black">Dashboard</span>
+                        <span className="cursor-pointer hover:text-black">History</span>
+                        <span className="cursor-pointer hover:text-black">Templates</span>
                     </div>
-                    
-                    <div className="flex items-center justify-between mb-3 border-t border-gray-700 pt-3">
-                        <span className="text-sm">จัดกลุ่มคำปกติ:</span>
-                        <select 
-                            value={wordCount}
-                            onChange={(e) => setWordCount(parseInt(e.target.value))}
-                            className="bg-gray-700 text-white text-xs rounded focus:ring-blue-500 p-1 outline-none"
-                        >
-                            <option value="1">1 คำ</option>
-                            <option value="2">2 คำ</option>
-                            <option value="3">3 คำ</option>
-                            <option value="4">4 คำ</option>
-                        </select>
-                    </div>
-                    <div className="flex items-center justify-between">
-                        <span className="text-sm">สีไฮไลท์ปกติ:</span>
-                        <input 
-                            type="color" 
-                            value={highlightColor}
-                            onChange={(e) => setHighlightColor(e.target.value)}
-                            className="p-0.5 h-6 w-12 block bg-gray-700 border border-gray-600 cursor-pointer rounded"
-                        />
-                    </div>
+                    <button className="bg-amber-100 text-amber-900 border border-amber-200 px-5 py-2 rounded-xl text-xs font-black shadow-sm">Upgrade</button>
                 </div>
+            </header>
+            
+            <div className="flex flex-col lg:flex-row gap-8 items-stretch h-full">
+                {/* Control Panel */}
+                <div className="w-full lg:w-5/12 gradient-card-orange p-10 flex flex-col gap-8 shadow-xl">
+                    <header>
+                        <h2 className="text-4xl font-serif font-bold mb-2 tracking-tight">Auto Caption</h2>
+                        <p className="text-amber-900/60 text-sm font-semibold tracking-wide uppercase">AI-POWERED SUBTITLES</p>
+                    </header>
 
-                <button 
-                    onClick={handleProcess}
-                    disabled={isProcessing}
-                    className="w-full bg-gradient-to-r from-pink-500 to-orange-400 hover:from-pink-600 hover:to-orange-500 disabled:opacity-50 text-white font-bold py-3 px-4 rounded-xl shadow-lg transform transition active:scale-95 flex justify-center items-center gap-2 mb-4"
-                >
-                    {isProcessing ? '⏳ AI กำลังถอดเสียงและหาคำเด่น...' : '✨ ถอดเสียง + วิเคราะห์คำด้วย AI'}
-                </button>
+                    <div className="space-y-6">
+                        <div className="space-y-3">
+                            <label className="block text-xs font-bold text-amber-900/50 uppercase tracking-widest ml-1">1. อัปโหลดวิดีโอ/เสียง</label>
+                            <div 
+                                onClick={() => fileInputRef.current?.click()}
+                                className="group relative cursor-pointer"
+                            >
+                                <input 
+                                    type="file" 
+                                    ref={fileInputRef}
+                                    onChange={handleFileChange}
+                                    accept="video/mp4,video/webm,audio/mp3,audio/wav" 
+                                    className="hidden"
+                                />
+                                <div className="bg-white/40 border-2 border-dashed border-amber-900/20 p-8 rounded-3xl flex flex-col items-center justify-center gap-4 group-hover:border-amber-900/40 transition-all">
+                                    <div className="w-16 h-16 rounded-full bg-amber-900/10 flex items-center justify-center text-amber-900 group-hover:scale-110 transition-transform">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                                    </div>
+                                    <div className="text-center">
+                                        <span className="block text-base font-bold text-amber-950">{file ? file.name : 'เลือกไฟล์ของคุณ'}</span>
+                                        <span className="text-xs text-amber-900/60 font-medium">MP4, WEBM, MP3 คมชัดระดับ 4K</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
 
-                {status && (
-                    <div className={`mb-4 px-4 py-3 rounded-lg overflow-hidden relative ${ 
-                        status.type === 'error' ? 'bg-red-900/50 text-red-100 border border-red-800' : 
-                        status.type === 'success' ? 'bg-green-900/50 text-green-100 border border-green-800' : 
-                        'bg-blue-900/40 text-blue-100 border border-blue-800/50 shadow-inner' 
-                    }`}>
-                        <div className="relative z-10 flex flex-col gap-2">
-                            <span className="text-sm font-medium text-center">{status.text}</span>
-                            {typeof status.progress === 'number' && (
-                                <div className="w-full bg-gray-900/80 rounded-full h-2.5 mb-1 overflow-hidden shadow-inner">
-                                    <div 
-                                        className="bg-blue-500 h-2.5 rounded-full transition-all duration-300 ease-out" 
-                                        style={{ width: `${status.progress}%` }}
-                                    ></div>
+                        <div className="space-y-4">
+                            <label className="block text-xs font-bold text-amber-900/50 uppercase tracking-widest ml-1">2. ปรับแต่งสไตล์ (พาวเวอร์อัพ AI)</label>
+                            
+                            <div className="flex items-center justify-between px-1 mb-2">
+                                <span className="text-[11px] font-bold text-amber-900/60 uppercase">ถอดเสียงขึ้นทีละ :</span>
+                                <div className="flex gap-1.5 bg-amber-900/5 p-1 rounded-xl">
+                                    {[1, 2, 3, 4].map(num => (
+                                        <button
+                                            key={num}
+                                            onClick={() => setWordCount(num)}
+                                            className={`w-10 h-8 rounded-lg text-xs font-black transition-all ${wordCount === num ? 'bg-amber-950 text-white shadow-md' : 'text-amber-900/40 hover:bg-white/40'}`}
+                                        >
+                                            {num}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div className="flex gap-2 p-1.5 bg-amber-900/5 rounded-2xl">
+                                {['tpl-default', 'tpl-hormozi', 'tpl-beast'].map((t) => (
+                                    <button 
+                                        key={t}
+                                        onClick={() => { setTemplate(t); if(t==='tpl-default') setHighlightColor('#FFFF00'); if(t==='tpl-hormozi') setHighlightColor('#00FF00'); if(t==='tpl-beast') setHighlightColor('#00FFFF'); }}
+                                        className={`flex-1 py-3 px-2 rounded-xl text-xs font-bold transition-all ${template === t ? 'bg-white text-amber-950 shadow-sm' : 'text-amber-900/50 hover:bg-white/40'}`}
+                                    >
+                                        {t.replace('tpl-', '').toUpperCase()}
+                                    </button>
+                                ))}
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <span className="text-[11px] font-bold text-amber-900/50 uppercase ml-1">ขนาดอักษร</span>
+                                    <div className="flex items-center gap-3 bg-white/60 border border-amber-900/10 rounded-2xl p-4">
+                                        <input 
+                                            type="range" 
+                                            min="0.5" 
+                                            max="1.5" 
+                                            step="0.1" 
+                                            value={fontSizeMultiplier}
+                                            onChange={(e) => setFontSizeMultiplier(parseFloat(e.target.value))}
+                                            className="flex-1 accent-amber-900"
+                                        />
+                                        <span className="text-xs font-bold text-amber-900 w-8">{Math.round(fontSizeMultiplier * 100)}%</span>
+                                    </div>
+                                </div>
+                                <div className="space-y-2">
+                                    <span className="text-[11px] font-bold text-amber-900/50 uppercase ml-1">ฟอนต์</span>
+                                    <select 
+                                        value={selectedFont}
+                                        onChange={(e) => setSelectedFont(e.target.value)}
+                                        className="w-full bg-white/60 border border-amber-900/10 rounded-2xl text-sm font-bold p-4 outline-none appearance-none"
+                                    >
+                                        <option value="Kanit">Kanit</option>
+                                        <option value="Prompt">Prompt</option>
+                                        <option value="Sarabun">Sarabun</option>
+                                        <option value="Mitr">Mitr</option>
+                                        <option value="Chakra Petch">Chakra Petch</option>
+                                        <option value="Inter">Inter</option>
+                                        <option value="Space Grotesk">Space Grotesk</option>
+                                        <option value="Custom">Custom Font ➕</option>
+                                    </select>
+                                </div>
+                                <div className="space-y-2">
+                                    <span className="text-[11px] font-bold text-amber-900/50 uppercase ml-1">Highlight</span>
+                                    <div className="flex gap-2">
+                                        <input 
+                                            type="color" 
+                                            value={highlightColor}
+                                            onChange={(e) => setHighlightColor(e.target.value)}
+                                            className="w-14 h-14 bg-white/60 border border-amber-900/10 cursor-pointer rounded-2xl overflow-hidden p-1.5"
+                                        />
+                                        <div className="bg-white/60 border border-amber-900/10 rounded-2xl flex-1 flex items-center justify-center text-[10px] font-bold text-amber-900">
+                                            {highlightColor.toUpperCase()}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {transcriptData.length > 0 && (
+                                <div className="space-y-3 bg-amber-950/5 p-4 rounded-3xl border border-amber-900/5">
+                                    <div className="flex items-center justify-between">
+                                        <label className="text-[11px] font-bold text-amber-900/50 uppercase">แก้ไขข้อความทั้งหมด</label>
+                                        <span className="text-[10px] font-bold text-amber-900/30">{transcriptData.length} คำ</span>
+                                    </div>
+                                    <div className="max-h-[300px] overflow-y-auto scrollbar-thin pr-2 space-y-1.5">
+                                        {transcriptData.map((item, idx) => (
+                                            <div key={idx} className="flex items-center gap-2 group">
+                                                <div 
+                                                    onClick={() => { if(videoRef.current) videoRef.current.currentTime = item.start; }}
+                                                    className="w-12 text-[10px] font-mono text-amber-900/40 cursor-pointer hover:text-black transition-colors"
+                                                >
+                                                    {item.start.toFixed(1)}s
+                                                </div>
+                                                <input 
+                                                    type="text"
+                                                    value={item.word}
+                                                    onChange={(e) => {
+                                                        const newData = [...transcriptData];
+                                                        newData[idx].word = e.target.value;
+                                                        setTranscriptData(newData);
+                                                    }}
+                                                    className="flex-1 bg-white/40 border-none rounded-xl px-3 py-2 text-xs font-bold text-amber-950 focus:ring-1 focus:ring-amber-500 outline-none"
+                                                />
+                                                <button 
+                                                    onClick={() => {
+                                                        const newData = [...transcriptData];
+                                                        newData[idx].is_hook = !newData[idx].is_hook;
+                                                        setTranscriptData(newData);
+                                                    }}
+                                                    className={`w-8 h-8 rounded-xl flex items-center justify-center transition-all ${item.is_hook ? 'bg-amber-400 shadow-sm' : 'bg-white/40 opacity-40 hover:opacity-100'}`}
+                                                >
+                                                    🔥
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
                                 </div>
                             )}
                         </div>
-                        {typeof status.progress === 'number' && (
-                            <div 
-                                className="absolute left-0 top-0 bottom-0 bg-blue-600/10 transition-all duration-300 ease-out"
-                                style={{ width: `${status.progress}%` }}
-                            ></div>
-                        )}
-                    </div>
-                )}
 
-                {transcriptData.length > 0 && (
-                    <div className="mb-4 bg-gray-800 p-4 rounded-xl border border-gray-700">
-                        <label className="block text-sm font-semibold mb-2 flex justify-between items-center">
-                            <span>3. ตรวจสอบและแก้ไขคำผิด</span>
-                            <span className="text-xs font-normal text-yellow-400">🔥 = AI จับว่าเป็นคำ Hook</span>
-                        </label>
-                        <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto p-2 bg-gray-900 rounded-lg border border-gray-700">
-                            {transcriptData.map((item, index) => (
-                                <div key={index} className="relative inline-block">
-                                    <input
-                                        type="text"
-                                        value={item.word}
-                                        onChange={(e) => {
-                                            const newData = [...transcriptData];
-                                            newData[index].word = e.target.value;
-                                            setTranscriptData(newData);
-                                        }}
-                                        onContextMenu={(e) => {
-                                            e.preventDefault();
-                                            const newData = [...transcriptData];
-                                            newData[index].is_hook = !newData[index].is_hook;
-                                            setTranscriptData(newData);
-                                        }}
-                                        style={{ width: `${Math.max(3, item.word.length + 1)}ch` }}
-                                        className={`bg-gray-700 text-white text-sm px-2 py-1 rounded w-auto min-w-[3rem] text-center focus:ring-2 focus:ring-blue-500 outline-none border transition ${
-                                            item.is_hook ? 'border-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.5)]' : 'border-gray-600'
-                                        }`}
-                                    />
-                                    {item.is_hook && (
-                                        <span className="absolute -top-2 -right-2 text-[10px] bg-gray-900 rounded-full">🔥</span>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-
-                {transcriptData.length > 0 && (
-                    <div className="grid grid-cols-2 gap-2 mt-2">
                         <button 
-                            onClick={handleDownloadSrt}
-                            className="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 px-4 rounded-xl shadow-lg transform transition flex justify-center items-center gap-2 border border-gray-600 text-sm"
+                            onClick={handleProcess}
+                            disabled={isProcessing}
+                            className="pitch-button w-full mt-4 flex items-center justify-center gap-3 active:scale-95 disabled:opacity-50"
                         >
-                            ⬇️ โหลด .srt
+                            {isProcessing ? (
+                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                            ) : 'Generate Captions'}
                         </button>
-                        {file?.type.startsWith('video/') && (
-                            <button 
-                                onClick={handleDownloadVideo}
-                                disabled={isExporting}
-                                className="w-full bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white font-bold py-3 px-4 rounded-xl shadow-lg transform transition flex justify-center items-center gap-2 border border-green-600 text-sm"
-                            >
-                                {isExporting ? '🎥 กำลังเรนเดอร์...' : '🎥 โหลดวิดีโอฝังซับ'}
-                            </button>
+
+                        {status && (
+                            <div className={`p-5 rounded-3xl text-sm font-bold ${ 
+                                status.type === 'error' ? 'bg-red-500/10 text-red-700' : 
+                                status.type === 'success' ? 'bg-green-500/10 text-green-700' : 
+                                'bg-white/30 text-amber-900' 
+                            }`}>
+                                <div className="flex items-center gap-3">
+                                    <div className={`w-2.5 h-2.5 rounded-full ${
+                                        status.type === 'error' ? 'bg-red-500' : status.type === 'success' ? 'bg-green-500' : 'bg-amber-600'
+                                    }`}></div>
+                                    <span>{status.text}</span>
+                                </div>
+                            </div>
                         )}
                     </div>
-                )}
-            </div>
+                </div>
 
-            {/* Display Panel */}
-            <div className="w-full lg:w-auto flex flex-col items-center">
-                <div id="player-wrapper" className="shadow-2xl">
-                    <video 
-                        ref={videoRef}
-                        src={videoSrc || undefined}
-                        onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
-                        playsInline 
-                        controls 
-                        crossOrigin="anonymous"
-                    ></video>
-                    
-                    <div id="captions-overlay" className={template}>
-                        {activeGroup && (() => {
-                            const activeWordIndex = activeGroup.words.findIndex((w, i) => {
-                                const nextStart = activeGroup.words[i+1]?.start ?? activeGroup.end + 0.5;
-                                return currentTime >= w.start && currentTime < nextStart;
-                            });
+                {/* Display Panel */}
+                <div className="w-full lg:w-7/12 flex flex-col items-center justify-center gradient-card-blue p-8">
+                    <div id="player-wrapper" className="border-[16px] border-white/40 shadow-2xl rounded-[60px]">
+                        <video 
+                            ref={videoRef}
+                            src={videoSrc || undefined}
+                            onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+                            playsInline 
+                            controls 
+                            crossOrigin="anonymous"
+                            className="pointer-events-auto"
+                        ></video>
+                        
+                        <div id="captions-overlay" className={template} style={{ fontFamily: `'${selectedFont === 'Custom' ? customFontConfig.name : selectedFont}', sans-serif` }}>
+                            {activeGroup && (() => {
+                                const activeWordIndex = activeGroup.words.findIndex((w, i) => {
+                                    const nextStart = activeGroup.words[i+1]?.start ?? activeGroup.end;
+                                    return currentTime >= w.start && currentTime < nextStart;
+                                });
 
-                            return activeGroup.words.map((w, i) => {
-                                const isActive = activeWordIndex !== -1 ? i === activeWordIndex : (currentTime >= w.start && currentTime <= w.end);
-                                const wordText = template !== 'tpl-default' ? w.word.toUpperCase() : w.word;
-                                
-                                const classes = [
-                                    'word',
-                                    isActive ? 'active' : '',
-                                    w.is_hook ? 'hook-word' : ''
-                                ].filter(Boolean).join(' ');
+                                return activeGroup.words.map((w, i) => {
+                                    const isActive = activeWordIndex !== -1 ? i === activeWordIndex : (currentTime >= w.start && currentTime <= w.end);
+                                    const wordText = template !== 'tpl-default' ? w.word.toUpperCase() : w.word;
+                                    
+                                    const classes = [
+                                        'word',
+                                        isActive ? 'active' : '',
+                                        w.is_hook ? 'hook-word' : ''
+                                    ].filter(Boolean).join(' ');
 
-                                const style: React.CSSProperties = {};
-                                if (isActive) {
-                                    if (template === 'tpl-hormozi' && w.is_hook) {
-                                        style.color = '#fff';
-                                    } else {
-                                        style.color = highlightColor;
+                                    const style: React.CSSProperties = {
+                                        fontSize: `${100 * fontSizeMultiplier}%`
+                                    };
+                                    if (isActive) {
+                                        if (template === 'tpl-hormozi' && w.is_hook) {
+                                            style.color = '#fff';
+                                        } else {
+                                            style.color = highlightColor;
+                                        }
                                     }
-                                }
 
-                                return (
-                                    <span key={i} className={classes} style={style}>
-                                        {wordText}
-                                    </span>
-                                );
-                            });
-                        })()}
+                                    return (
+                                        <span key={i} className={classes} style={style}>
+                                            {wordText}
+                                        </span>
+                                    );
+                                });
+                            })()}
+                        </div>
                     </div>
                 </div>
             </div>
+
+            {/* Bottom Timeline */}
+            {transcriptData.length > 0 && (
+                <div className="timeline-container">
+                    <div className="flex flex-col sm:flex-row items-center justify-between mb-8 px-2">
+                        <div className="flex items-center gap-4">
+                            <div className="w-12 h-12 rounded-2xl bg-black text-white flex items-center justify-center text-xl">⏳</div>
+                            <div>
+                                <h3 className="text-xl font-serif font-bold tracking-tight">Timeline Editor</h3>
+                                <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">FINE-TUNE YOUR HOOKS</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <button onClick={handleDownloadSrt} className="glass-button py-3 px-6 text-sm">Download .SRT</button>
+                            <button 
+                                onClick={handleDownloadVideo}
+                                disabled={isExporting}
+                                className="pitch-button py-3 px-6 text-sm"
+                            >
+                                {isExporting ? 'Rendering...' : 'Export Video'}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div 
+                        ref={timelineTrackRef}
+                        onMouseDown={(e) => {
+                            if (e.target === timelineTrackRef.current) {
+                                setEditingIndex(null);
+                            }
+                        }}
+                        className="timeline-track scrollbar-thin rounded-3xl bg-white/50 border border-white relative select-none"
+                    >
+                        {/* Ruler */}
+                        <div className="timeline-ruler" style={{ width: `${(videoRef.current?.duration || 0) * 150}px` }}>
+                            {Array.from({ length: Math.ceil(videoRef.current?.duration || 0) + 1 }).map((_, i) => (
+                                <div key={i} className="ruler-mark" style={{ left: `${i * 150}px` }}>
+                                    {i}s
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Word Clips */}
+                        {transcriptData.map((item, index) => {
+                            const isActive = currentTime >= item.start && currentTime < item.end;
+                            return (
+                                <div 
+                                    key={index} 
+                                    onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        const rect = timelineTrackRef.current?.getBoundingClientRect();
+                                        if (!rect) return;
+                                        const x = e.clientX - rect.left + (timelineTrackRef.current?.scrollLeft || 0);
+                                        
+                                        const clipLeft = item.start * 150;
+                                        const clipWidth = (item.end - item.start) * 150;
+                                        
+                                        if (x < clipLeft + 12) {
+                                            setDragging({ index, type: 'resize-left', initialX: x, initialStart: item.start, initialEnd: item.end });
+                                        } else if (x > clipLeft + clipWidth - 12) {
+                                            setDragging({ index, type: 'resize-right', initialX: x, initialStart: item.start, initialEnd: item.end });
+                                        } else {
+                                            setDragging({ index, type: 'move', initialX: x, initialStart: item.start, initialEnd: item.end });
+                                        }
+                                        
+                                        setEditingIndex(index);
+                                        if (videoRef.current) videoRef.current.currentTime = item.start;
+                                    }}
+                                    className={`timeline-word-clip group cursor-grab active:cursor-grabbing ${isActive || editingIndex === index ? 'active ring-2 ring-black/20 shadow-lg' : ''} ${item.is_hook ? 'hook' : ''} !rounded-xl !h-[54px] !top-[48px] border-2 transition-all`}
+                                    style={{ 
+                                        left: `${item.start * 150}px`, 
+                                        width: `${(item.end - item.start) * 150}px`,
+                                        zIndex: (isActive || editingIndex === index) ? 50 : 1
+                                    } as React.CSSProperties}
+                                >
+                                    <div className="absolute left-0 top-0 bottom-0 w-2.5 cursor-ew-resize hover:bg-black/10 rounded-l-lg"></div>
+                                    <span className="truncate max-w-full px-2 z-10 font-black text-[11px] pointer-events-none select-none">{item.word}</span>
+                                    <div className="absolute right-0 top-0 bottom-0 w-2.5 cursor-ew-resize hover:bg-black/10 rounded-r-lg"></div>
+                                    
+                                    {editingIndex === index && (
+                                        <div 
+                                            onMouseDown={(e) => e.stopPropagation()}
+                                            className="absolute -top-14 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-amber-950 p-1.5 rounded-2xl shadow-2xl z-50 animate-in zoom-in-90 duration-150"
+                                        >
+                                            <input 
+                                                type="text" 
+                                                value={item.word}
+                                                autoFocus
+                                                onMouseDown={(e) => e.stopPropagation()}
+                                                onClick={(e) => e.stopPropagation()}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') setEditingIndex(null);
+                                                }}
+                                                onChange={(e) => {
+                                                    const newData = [...transcriptData];
+                                                    newData[index].word = e.target.value;
+                                                    setTranscriptData(newData);
+                                                }}
+                                                className="w-24 text-[11px] bg-white/10 border-none rounded-lg px-2 py-1.5 focus:ring-1 focus:ring-amber-400 font-bold text-white placeholder-white/30"
+                                            />
+                                            <button 
+                                                onMouseDown={(e) => e.stopPropagation()}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    const newData = [...transcriptData];
+                                                    newData[index].is_hook = !newData[index].is_hook;
+                                                    setTranscriptData(newData);
+                                                }}
+                                                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${item.is_hook ? 'bg-amber-400 scale-110 active:scale-95 text-black' : 'bg-white/10 text-white hover:bg-white/20'}`}
+                                            >
+                                                🔥
+                                            </button>
+                                            <button 
+                                                onMouseDown={(e) => e.stopPropagation()}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setEditingIndex(null);
+                                                }}
+                                                className="w-6 h-8 text-white/50 hover:text-white text-xs font-bold px-1"
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+
+                        {/* Playhead */}
+                        <div 
+                            className="timeline-playhead !bg-black after:!bg-black" 
+                            style={{ left: `${currentTime * 150}px` }}
+                        ></div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
